@@ -1,15 +1,13 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import PlainTextResponse, RedirectResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import PlainTextResponse, RedirectResponse, StreamingResponse
 import requests
 import re
 
 app = FastAPI()
 
-# Point this to your active Render web app domain address
+# Make sure this matches your exact deployment URL
 HOST_URL = "https://cnc-fta1.onrender.com"
 
-# Hardcoded pristine mapping of the top live TV channels sourced from Cricfy / SKTech
-# This completely eliminates the need to scrape the index pages that return Cloudflare 403 blocks
 LIVE_CHANNELS_DATABASE = {
     "star-sports-1": {
         "name": "Star Sports 1 Hindi",
@@ -56,45 +54,46 @@ SPOOF_HEADERS = {
 
 @app.get("/", response_class=PlainTextResponse)
 def root_index():
-    return "CNC Verse Server Online. Load /playlist.m3u into your IPTV media engine client."
+    return "CNC Proxy Active. Load /playlist.m3u into your player."
 
 @app.get("/playlist.m3u", response_class=PlainTextResponse)
 def generate_m3u_file():
-    """Generates a perfect, readable playlist structure with working paths for the player"""
     m3u_output = "#EXTM3U\n"
-    
     for key, item in LIVE_CHANNELS_DATABASE.items():
         fallback_logo = f"https://img.logo.dev/{key}.png?token=public"
         m3u_output += f'#EXTINF:-1 tvg-id="{key}" tvg-logo="{fallback_logo}" group-title="{item["group"]}",{item["name"]}\n'
         m3u_output += f'{HOST_URL}/live/{key}\n'
-        
     return m3u_output
 
 @app.get("/live/{channel_key}")
 def stream_extractor_router(channel_key: str):
-    """Intercepts playback requests and performs a localized stream lookup bypassing blocks"""
     if channel_key not in LIVE_CHANNELS_DATABASE:
-        raise HTTPException(status_code=404, detail="Selected streaming signature is unavailable")
+        raise HTTPException(status_code=404, detail="Channel not found")
         
     target_embed = LIVE_CHANNELS_DATABASE[channel_key]["embed_url"]
     
     try:
-        # Requesting the internal stream config frame directly using custom Android TV signatures
         session = requests.Session()
         response = session.get(target_embed, headers=SPOOF_HEADERS, timeout=6)
         
-        # Pull down the tokenized high-speed .m3u8 manifest file location hidden in scripts
+        # Pull tokenized .m3u8 link from scripts
         manifest_url_match = re.search(r'(https?://[^\s"\']+\.m3u8[^\s"\']*)', response.text)
         
         if manifest_url_match:
             clean_live_link = manifest_url_match.group(1).replace('\\', '')
-            # Instantly pipe the validated stream back directly into your IPTV client frame buffer
-            return RedirectResponse(url=clean_live_link)
             
-    except Exception as network_error:
-        print(f"Bypass network routing error: {network_error}")
+            # To fix the token block, we append token-friendly play instructions
+            # or redirect to a stable tokenless edge node mirror
+            if "stream.cricfy.top" in clean_live_link:
+                # Mirror redirect structure that doesn't tie down hard to IP locks
+                alternative_node = f"https://stream.cricfy.top/live/{channel_key}/playlist.m3u8"
+                return RedirectResponse(url=alternative_node, headers={"Referer": "https://cricfy.top/"})
+                
+            return RedirectResponse(url=clean_live_link, headers={"Referer": "https://cricfy.top/"})
+            
+    except Exception as e:
+        print(f"Extraction failed: {e}")
         
-    # Ultimate direct structural streaming path mirror fallback rule
-    # Many streams inside cricfy utilize clean token tracking matches:
+    # Ultimate direct absolute mirror link
     direct_mirror_url = f"https://stream.cricfy.top/live/{channel_key}/playlist.m3u8"
-    return RedirectResponse(url=direct_mirror_url)
+    return RedirectResponse(url=direct_mirror_url, headers={"Referer": "https://cricfy.top/"})
